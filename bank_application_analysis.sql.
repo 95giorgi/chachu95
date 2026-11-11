@@ -1,0 +1,123 @@
+
+with head_table as (
+select a.client_id,
+       a.application_id,
+       a.application_date,
+       a.application_amount,
+       a.application_type_id,
+       e.application_status_description,
+       case when e.application_status_description in ('Approved', 'Pre-Approved') then 'Positive'
+            when e.application_status_description in ('Rejected', 'Closed', 'Incomplete') then 'Negative'
+            when e.application_status_description in ('Pending Application Response', 'Document required', 'Legal Review', 'Fraud Check', 'Escalated') then 'In Progress'
+            end as app_status_group,
+       case when (datediff(month,f.birth_date,getdate())/12) < 30 then 'Young'
+            when (datediff(month,f.birth_date,getdate())/12) between 30 and 45 then 'Prime'
+            when (datediff(month,f.birth_date,getdate())/12) > 45 then 'Senior'
+            end as age_group,
+       case when f.customer_income < 1000 then 'Low'
+            when f.customer_income between 1000 and 2500 then 'Medium'
+            when f.customer_income  > 2500 then 'High'
+            end as income_group,
+       case when (datediff(day,b.register_date, a.application_date)) < 1 then 'Short term'
+            when (datediff(day,b.register_date, a.application_date)) between 1 and 90 then 'Medium term'
+            when (datediff(day,b.register_date, a.application_date)) > 90 then 'Long term'
+            end as registration_to_app_group,
+       datediff(day,a.application_date,lead(a.application_date) over (partition by a.client_id order by a.application_date)) as day_between_apps,
+       f.customer_income,
+       g.application_type_description,
+       d.object_type_description,
+       c.object_description,
+       a.application_interest_rate,
+       sum(a.application_amount) over (partition by object_description) as amount_per_object,
+       round(avg(application_interest_rate) over ( partition by object_description), 2) as avg_rate_object,
+       round(avg(application_interest_rate) over ( partition by application_type_description), 2) as avg_rate_app_type,
+       case when ( application_amount / f.customer_income ) < 5 then 'Low Risk'
+            when ( application_amount / f.customer_income ) between 5 and 10 then 'Moderate'
+            when ( application_amount / f.customer_income ) > 10 then 'High risk' end as risk_management
+
+
+from Applications as a
+inner join users as b on b.client_id = a.client_id
+inner join Object as c on c.object_id = a.application_object_id
+inner join Object_type as d on d.object_type_id = c.object_type_id
+inner join Application_status as e on e.application_status_id = a.application_status_id
+inner join Customer as f on f.id = a.client_id
+inner join Application_type as g on g.application_type_id = a.application_type_id
+),
+
+positive_applications as (
+   select client_id,
+          count (application_id) as Positive_Apps,
+          sum(application_amount)  as Positive_Amount
+
+    from head_table
+    where app_status_group in ('Positive')
+    group by client_id
+    ),
+negative_applications as (
+    select client_id,
+          count (application_id) as Negative_Apps,
+          sum(application_amount)  as Negative_Amount
+
+    from head_table
+    where app_status_group in ('Negative')
+    group by client_id
+    ),
+In_progress_applications as (
+    select client_id,
+          count (application_id) as In_progress_Apps,
+          sum(application_amount)  as In_progress_Amount
+
+    from head_table
+    where app_status_group in ('In Progress')
+    group by client_id
+    ),
+app_status_summary as (
+    select client_id,
+           count (case when application_status_description = 'Document required' then 1 end) AS doc_required_apps,
+           count (case when application_status_description = 'Legal Review' then 1 end) AS legal_review_apps,
+           count (case when application_status_description = 'Fraud Check' then 1 end) AS fraud_check_apps,
+           count (case when application_status_description = 'Escalated' then 1 end) AS escalated_apps
+
+    from head_table
+    group by client_id
+)
+
+    SELECT
+    a.client_id,
+    a.application_id,
+    a.application_amount,
+    a.customer_income,
+    a.income_group,
+    a.app_status_group,
+    a.age_group,
+    a.application_date,
+    a.registration_to_app_group,
+    a.risk_management,
+    a.day_between_apps,
+    a.object_description,
+    a.object_type_description,
+    a.application_type_description,
+    a.amount_per_object,
+    a.avg_rate_object,
+    a.avg_rate_app_type,
+    isnull(b.Positive_Apps, 0) as positive_apps,
+    isnull(b.Positive_Amount, 0) as positive_amount,
+    isnull(c.Negative_Apps, 0) as negative_apps,
+    isnull(c.Negative_Amount, 0) as negative_amount,
+    isnull(d.In_progress_Apps, 0) as in_progress_apps,
+    isnull(d.In_progress_Amount, 0) as in_progress_amount,
+    e.doc_required_apps,
+    e.legal_review_apps,
+    e.fraud_check_apps,
+    e.escalated_apps
+
+
+
+FROM head_table AS a
+LEFT JOIN positive_applications AS b ON a.client_id = b.client_id
+LEFT JOIN negative_applications AS c ON a.client_id = c.client_id
+LEFT JOIN in_progress_applications AS d ON a.client_id = d.client_id
+LEFT JOIN app_status_summary AS e ON a.client_id = e.client_id
+
+
