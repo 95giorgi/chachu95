@@ -1,0 +1,186 @@
+WITH main_table
+     AS (SELECT a.customer_id,
+                a.order_id,
+                a.order_date,
+                e.country_name,
+                a.country_id,
+                Sum (CASE
+                       WHEN b.currency_code = 'usd'THEN a.order_amount * 2.69
+                       WHEN b.currency_code = 'eur'THEN a.order_amount * 2.93
+                       WHEN b.currency_code = 'gbp'THEN a.order_amount * 3.42
+                       WHEN b.currency_code = 'jpy'THEN a.order_amount * 0.0179
+                       WHEN b.currency_code = 'aud'THEN a.order_amount * 1.99
+                       WHEN b.currency_code = 'inr'THEN a.order_amount * 0.0324
+                       WHEN b.currency_code = 'brl'THEN a.order_amount * 0.54
+                     END)
+                  OVER (
+                    partition BY a.customer_id)                  AS
+                amount_per_customer,
+                Sum (CASE
+                       WHEN b.currency_code = 'usd' THEN a.order_amount * 2.69
+                       WHEN b.currency_code = 'eur' THEN a.order_amount * 2.93
+                       WHEN b.currency_code = 'gbp' THEN a.order_amount * 3.42
+                       WHEN b.currency_code = 'jpy' THEN a.order_amount * 0.0179
+                       WHEN b.currency_code = 'aud' THEN a.order_amount * 1.99
+                       WHEN b.currency_code = 'inr' THEN a.order_amount * 0.0324
+                       WHEN b.currency_code = 'brl' THEN a.order_amount * 0.54
+                       ELSE 0
+                     END)
+                  OVER (
+                    partition BY a.customer_id, a.order_date)    AS
+                amount_per_date,
+                Sum (CASE
+                       WHEN b.currency_code = 'usd' THEN a.order_amount * 2.69
+                       WHEN b.currency_code = 'eur' THEN a.order_amount * 2.93
+                       WHEN b.currency_code = 'gbp' THEN a.order_amount * 3.42
+                       WHEN b.currency_code = 'jpy' THEN a.order_amount * 0.0179
+                       WHEN b.currency_code = 'aud' THEN a.order_amount * 1.99
+                       WHEN b.currency_code = 'inr' THEN a.order_amount * 0.0324
+                       WHEN b.currency_code = 'brl' THEN a.order_amount * 0.54
+                       ELSE 0
+                     END)
+                  OVER (
+                    partition BY a.customer_id, a.country_id )   AS
+                amount_per_country,
+                Datediff(month, c.date_of_birth, Getdate()) / 12 AS age,
+                Row_number()
+                  OVER (
+                    partition BY a.customer_id
+                    ORDER BY a.order_date)                       AS order_rn,
+                b.currency_code,
+                a.order_amount,
+                Count(a.order_id)
+                  OVER (
+                    partition BY a.customer_id)                  AS order_count,
+                 Count(a.order_id)
+                  OVER (
+                    partition BY a.customer_id, a.order_date)    AS
+                order_per_date
+                ,
+                Sum (CASE
+                       WHEN b.currency_code = 'usd' THEN a.order_amount * 2.69
+                       WHEN b.currency_code = 'eur' THEN a.order_amount * 2.93
+                       WHEN b.currency_code = 'gbp' THEN a.order_amount * 3.42
+                       WHEN b.currency_code = 'jpy' THEN a.order_amount * 0.0179
+                       WHEN b.currency_code = 'aud' THEN a.order_amount * 1.99
+                       WHEN b.currency_code = 'inr' THEN a.order_amount * 0.0324
+                       WHEN b.currency_code = 'brl' THEN a.order_amount * 0.54
+                       ELSE 0
+                     END)
+                  OVER (
+                    partition BY a.customer_id, d.business_type )   AS
+                amount_by_bussines_type,
+                d.business_type,
+                a.product_id,
+                g.product_category_id
+         FROM   fact_orders AS a
+                INNER JOIN dim_currency AS b
+                        ON a.currency_id = b.currency_id
+                INNER JOIN dim_customers AS c
+                        ON a.customer_id = c.customer_id
+                INNER JOIN dim_sellers AS d
+                        ON a.seller_id = d.seller_id
+                INNER JOIN dim_countries AS e
+                        ON a.country_id = e.country_id
+                INNER JOIN dim_cities AS f
+                        ON a.city_id = f.city_id
+                INNER JOIN dim_products AS g
+                        ON a.product_id = g.product_id
+                INNER JOIN dim_product_category AS h
+                        ON g.product_category_id = h.product_category_id
+                INNER JOIN dim_order_status AS i
+                        ON a.order_status_id = i.order_status_id),
+     first_order_amount
+     AS (SELECT customer_id,
+                amount_per_date AS first_order_amount
+         FROM   main_table
+         WHERE  order_rn = 1),
+     popular_country_customer
+     AS (SELECT customer_id,
+                country_name AS popular_country
+         FROM   ( select customer_id,
+                amount_per_country,
+                country_name,
+                Row_number()
+                  OVER (
+                    partition BY customer_id
+                    ORDER BY amount_per_country DESC) AS country_rn
+         FROM   main_table) as a
+         WHERE  country_rn = 1),
+     customer_age
+     AS (SELECT DISTINCT customer_id,
+                         CASE
+                           WHEN age < 35 THEN 'young'
+                           WHEN age BETWEEN 35 AND 45 THEN 'middle'
+                           ELSE 'old'
+                         END AS age_group
+         FROM   main_table),
+     amount_action
+     AS (SELECT customer_id,
+                amount_per_date,
+                order_date,
+                Lead(amount_per_date)
+                  OVER (
+                    partition BY customer_id
+                    ORDER BY order_date) AS next_amount,
+                CASE
+                  WHEN Lead(amount_per_date)
+                         OVER (
+                           partition BY customer_id
+                           ORDER BY order_date) IS NULL THEN 'last order'
+                  WHEN Lead(amount_per_date)
+                         OVER (
+                           partition BY customer_id
+                           ORDER BY order_date) > amount_per_date THEN
+                  'positive'
+                  WHEN Lead(amount_per_date)
+                         OVER (
+                           partition BY customer_id
+                           ORDER BY order_date) < amount_per_date THEN
+                  'negative'
+                  ELSE 'same'
+                END                      AS customer_spend_dynamic
+         FROM   main_table),
+    top_business_type AS (
+    SELECT *
+    FROM (
+        SELECT customer_id,
+               amount_per_date,
+               business_type as top_business_type,
+               row_number() over (
+                   partition by customer_id
+                   order by amount_by_bussines_type desc
+               ) AS rn
+        FROM main_table
+    ) as a
+    WHERE rn = 1
+),
+     final_table
+     AS (SELECT a.customer_id,
+                a.order_date,
+                a.amount_per_date,
+                e.customer_spend_dynamic,
+                a.order_amount as amount_by_currency,
+                a.currency_code,
+                a.order_per_date,
+                a.country_name,
+                a.business_type,
+                a.product_id,
+                a.product_category_id
+         FROM   main_table AS a
+                LEFT JOIN first_order_amount AS b
+                       ON a.customer_id = b.customer_id
+                LEFT JOIN popular_country_customer AS c
+                       ON a.customer_id = c.customer_id
+                LEFT JOIN customer_age AS d
+                       ON a.customer_id = d.customer_id
+                LEFT JOIN amount_action AS e
+                       ON a.customer_id = e.customer_id
+                          AND a.order_date = e.order_date
+                LEFT JOIN top_business_type AS f
+                       ON a.customer_id = f.customer_id
+                          )
+SELECT *
+FROM   final_table
+ORDER  BY customer_id,
+          order_date
